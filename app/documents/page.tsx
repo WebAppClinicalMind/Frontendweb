@@ -9,58 +9,39 @@ import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { FileText, Search, RefreshCw, ChevronRight, Loader2, AlertCircle } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { useToast } from "@/hooks/use-toast"
+import { FileText, Search, RefreshCw, ChevronRight, Loader2, AlertCircle, Trash2 } from "lucide-react"
 import apiClient from "@/lib/api/client"
-import type { IndexStatistics } from "@/lib/api/types"
-
-// Mock data for document list (in real app, this would come from API)
-interface Document {
-  document_id: string
-  filename: string
-  status: "processing" | "completed" | "failed"
-  upload_timestamp: string
-  document_type: string
-  file_size: number
-}
-
-const mockDocuments: Document[] = [
-  {
-    document_id: "d1a2b3c4-5678-90ab-cdef-1234567890ab",
-    filename: "patient_report_2024.pdf",
-    status: "completed",
-    upload_timestamp: "2024-01-15T10:30:00Z",
-    document_type: "pdf",
-    file_size: 2457600,
-  },
-  {
-    document_id: "e2b3c4d5-6789-01bc-def0-2345678901bc",
-    filename: "lab_results_jan.docx",
-    status: "processing",
-    upload_timestamp: "2024-01-15T11:00:00Z",
-    document_type: "docx",
-    file_size: 156000,
-  },
-  {
-    document_id: "f3c4d5e6-7890-12cd-ef01-3456789012cd",
-    filename: "clinical_notes.txt",
-    status: "completed",
-    upload_timestamp: "2024-01-14T09:15:00Z",
-    document_type: "txt",
-    file_size: 45000,
-  },
-  {
-    document_id: "g4d5e6f7-8901-23de-f012-4567890123de",
-    filename: "radiology_scan.pdf",
-    status: "failed",
-    upload_timestamp: "2024-01-14T08:45:00Z",
-    document_type: "pdf",
-    file_size: 8900000,
-  },
-]
+import type { IndexStatistics, DocumentListResponse } from "@/lib/api/types"
 
 export default function DocumentsPage() {
   const [searchQuery, setSearchQuery] = useState("")
-  const [documents] = useState<Document[]>(mockDocuments)
+  const [page, setPage] = useState(1)
+  const [pageSize] = useState(20)
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [documentToDelete, setDocumentToDelete] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const { toast } = useToast()
+
+  const {
+    data: documentsData,
+    isLoading: documentsLoading,
+    error: documentsError,
+    mutate: refreshDocuments,
+  } = useSWR<DocumentListResponse>(["documents", page, pageSize], () => apiClient.listDocuments(page, pageSize), {
+    revalidateOnFocus: false,
+    errorRetryCount: 2,
+  })
 
   const { data: stats, isLoading: statsLoading } = useSWR<IndexStatistics>(
     "indexer-stats",
@@ -68,7 +49,10 @@ export default function DocumentsPage() {
     { revalidateOnFocus: false, errorRetryCount: 2 },
   )
 
-  const filteredDocuments = documents.filter((doc) => doc.filename.toLowerCase().includes(searchQuery.toLowerCase()))
+  const documents = documentsData?.documents ?? []
+  const filteredDocuments = documents.filter((doc) =>
+    doc.original_filename.toLowerCase().includes(searchQuery.toLowerCase()),
+  )
 
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return bytes + " B"
@@ -86,7 +70,31 @@ export default function DocumentsPage() {
     })
   }
 
-  const getStatusBadge = (status: Document["status"]) => {
+  const handleDeleteDocument = async () => {
+    if (!documentToDelete) return
+
+    setIsDeleting(true)
+    try {
+      await apiClient.deleteDocument(documentToDelete)
+      toast({
+        title: "Document deleted",
+        description: "The document has been successfully deleted.",
+      })
+      refreshDocuments()
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to delete document",
+        variant: "destructive",
+      })
+    } finally {
+      setIsDeleting(false)
+      setDeleteDialogOpen(false)
+      setDocumentToDelete(null)
+    }
+  }
+
+  const getStatusBadge = (status: "processing" | "completed" | "failed") => {
     switch (status) {
       case "completed":
         return (
@@ -166,7 +174,7 @@ export default function DocumentsPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle>Documents</CardTitle>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={() => refreshDocuments()}>
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Refresh
               </Button>
@@ -185,59 +193,113 @@ export default function DocumentsPage() {
               </div>
             </div>
 
-            <div className="rounded-lg border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Filename</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Uploaded</TableHead>
-                    <TableHead className="w-10"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredDocuments.length === 0 ? (
+            {documentsLoading ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : documentsError ? (
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                <FileText className="h-8 w-8 mb-2" />
+                <p>Failed to load documents</p>
+              </div>
+            ) : (
+              <div className="rounded-lg border">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                        No documents found
-                      </TableCell>
+                      <TableHead>Filename</TableHead>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Size</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Uploaded</TableHead>
+                      <TableHead className="w-10"></TableHead>
                     </TableRow>
-                  ) : (
-                    filteredDocuments.map((doc) => (
-                      <TableRow key={doc.document_id}>
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            <FileText className="h-5 w-5 text-muted-foreground" />
-                            <span className="font-medium">{doc.filename}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <span className="uppercase text-xs font-medium text-muted-foreground">
-                            {doc.document_type}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{formatFileSize(doc.file_size)}</TableCell>
-                        <TableCell>{getStatusBadge(doc.status)}</TableCell>
-                        <TableCell className="text-muted-foreground">{formatDate(doc.upload_timestamp)}</TableCell>
-                        <TableCell>
-                          <Link href={`/documents/${doc.document_id}`}>
-                            <Button variant="ghost" size="icon">
-                              <ChevronRight className="h-4 w-4" />
-                              <span className="sr-only">View details</span>
-                            </Button>
-                          </Link>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredDocuments.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                          No documents found
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    ) : (
+                      filteredDocuments.map((doc) => (
+                        <TableRow key={doc.document_id}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <FileText className="h-5 w-5 text-muted-foreground" />
+                              <span className="font-medium">{doc.original_filename}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <span className="uppercase text-xs font-medium text-muted-foreground">
+                              {doc.document_type}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-muted-foreground">{formatFileSize(doc.file_size)}</TableCell>
+                          <TableCell>{getStatusBadge(doc.status)}</TableCell>
+                          <TableCell className="text-muted-foreground">{formatDate(doc.upload_timestamp)}</TableCell>
+                          <TableCell>
+                            <div className="flex items-center gap-1">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => {
+                                  setDocumentToDelete(doc.document_id)
+                                  setDeleteDialogOpen(true)
+                                }}
+                                disabled={isDeleting}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                                <span className="sr-only">Delete</span>
+                              </Button>
+                              <Link href={`/documents/${doc.document_id}`}>
+                                <Button variant="ghost" size="icon">
+                                  <ChevronRight className="h-4 w-4" />
+                                  <span className="sr-only">View details</span>
+                                </Button>
+                              </Link>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Document</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this document? This action cannot be undone and will permanently remove
+              the document and all associated data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isDeleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteDocument}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   )
 }

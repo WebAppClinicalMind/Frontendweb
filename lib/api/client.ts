@@ -4,6 +4,8 @@ import type {
   DocumentStatus,
   DocumentDetails,
   DocumentContent,
+  DocumentListResponse,
+  DeleteDocumentResponse,
   AnonymizeResponse,
   AnonymizedDocument,
   SearchResponse,
@@ -14,6 +16,7 @@ import type {
   QAResponse,
   QueryDetails,
   QueryHistoryResponse,
+  ClearQueriesResponse,
   ModelInfo,
   HealthStatus,
 } from "./types"
@@ -53,6 +56,22 @@ class APIClient {
   }
 
   // DocIngestor Service - http://localhost:8001
+  async listDocuments(
+    page = 1,
+    pageSize = 20,
+    status?: "processing" | "completed" | "failed",
+    sourceSystem?: string,
+  ): Promise<DocumentListResponse> {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      page_size: pageSize.toString(),
+    })
+    if (status) params.append("status", status)
+    if (sourceSystem) params.append("source_system", sourceSystem)
+
+    return this.request<DocumentListResponse>(this.config.docIngestor, `/v1/documents?${params.toString()}`)
+  }
+
   async uploadDocument(file: File, sourceSystem?: string): Promise<DocumentUploadResponse> {
     const formData = new FormData()
     formData.append("file", file)
@@ -90,6 +109,12 @@ class APIClient {
 
   async getDocumentContent(documentId: string): Promise<DocumentContent> {
     return this.request<DocumentContent>(this.config.docIngestor, `/v1/documents/${documentId}/content`)
+  }
+
+  async deleteDocument(documentId: string): Promise<DeleteDocumentResponse> {
+    return this.request<DeleteDocumentResponse>(this.config.docIngestor, `/v1/documents/${documentId}`, {
+      method: "DELETE",
+    })
   }
 
   // DeID Service - http://localhost:8002
@@ -184,6 +209,13 @@ class APIClient {
 
   async getModelInfo(): Promise<ModelInfo> {
     return this.request<ModelInfo>(this.config.llmqa, "/v1/models")
+  }
+
+  async clearQueryHistory(userId?: string): Promise<ClearQueriesResponse> {
+    const params = userId ? `?user_id=${userId}` : ""
+    return this.request<ClearQueriesResponse>(this.config.llmqa, `/v1/queries${params}`, {
+      method: "DELETE",
+    })
   }
 
   // Health Checks

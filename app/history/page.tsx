@@ -9,7 +9,18 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { MessageSquare, Search, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Loader2 } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { useToast } from "@/hooks/use-toast"
+import { MessageSquare, Search, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Loader2, Trash2 } from "lucide-react"
 import apiClient from "@/lib/api/client"
 import type { QueryHistoryResponse } from "@/lib/api/types"
 
@@ -17,12 +28,18 @@ export default function HistoryPage() {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [searchQuery, setSearchQuery] = useState("")
+  const [clearDialogOpen, setClearDialogOpen] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
+  const { toast } = useToast()
 
-  const { data, isLoading, error } = useSWR<QueryHistoryResponse>(
-    ["query-history", page, pageSize],
-    () => apiClient.getQueryHistory(page, pageSize),
-    { revalidateOnFocus: false },
-  )
+  const {
+    data,
+    isLoading,
+    error,
+    mutate: refreshHistory,
+  } = useSWR<QueryHistoryResponse>(["query-history", page, pageSize], () => apiClient.getQueryHistory(page, pageSize), {
+    revalidateOnFocus: false,
+  })
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString("en-US", {
@@ -32,6 +49,28 @@ export default function HistoryPage() {
       hour: "2-digit",
       minute: "2-digit",
     })
+  }
+
+  const handleClearHistory = async () => {
+    setIsClearing(true)
+    try {
+      const result = await apiClient.clearQueryHistory()
+      toast({
+        title: "History cleared",
+        description: `Successfully deleted ${result.deleted_count} ${result.deleted_count === 1 ? "query" : "queries"}.`,
+      })
+      setPage(1)
+      refreshHistory()
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to clear query history",
+        variant: "destructive",
+      })
+    } finally {
+      setIsClearing(false)
+      setClearDialogOpen(false)
+    }
   }
 
   const totalPages = data ? Math.ceil(data.total / data.page_size) : 0
@@ -94,7 +133,18 @@ export default function HistoryPage() {
         {/* Query List */}
         <Card>
           <CardHeader>
-            <CardTitle>Query History</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Query History</CardTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setClearDialogOpen(true)}
+                disabled={isClearing || !data || data.total === 0}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Clear All
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className="mb-4">
@@ -209,6 +259,35 @@ export default function HistoryPage() {
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={clearDialogOpen} onOpenChange={setClearDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Clear Query History</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to clear all query history? This will permanently delete all {data?.total ?? 0}{" "}
+              {data?.total === 1 ? "query" : "queries"} and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isClearing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleClearHistory}
+              disabled={isClearing}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {isClearing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Clearing...
+                </>
+              ) : (
+                "Clear All"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppLayout>
   )
 }

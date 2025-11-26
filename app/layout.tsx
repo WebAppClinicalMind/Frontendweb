@@ -11,7 +11,7 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "DocQA - Medical Document Q&A System",
   description: "Intelligent medical document processing and question-answering system",
-  generator: "v0.app",
+  generator: "DocQA",
 }
 
 export default function RootLayout({

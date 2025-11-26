@@ -24,6 +24,28 @@ export interface DocumentStatus {
   error_message: string | null
 }
 
+export interface DocumentListItem {
+  document_id: string
+  original_filename: string
+  upload_timestamp: string
+  document_type: string
+  source_system: string | null
+  file_size: number
+  status: "processing" | "completed" | "failed"
+}
+
+export interface DocumentListResponse {
+  documents: DocumentListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface DeleteDocumentResponse {
+  message: string
+  document_id: string
+}
+
 export interface DocumentContent {
   content_id: string
   document_id: string
@@ -177,6 +199,11 @@ export interface QueryHistoryResponse {
   total: number
   page: number
   page_size: number
+}
+
+export interface ClearQueriesResponse {
+  message: string
+  deleted_count: number
 }
 
 export interface ModelInfo {

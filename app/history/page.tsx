@@ -194,7 +194,11 @@ export default function HistoryPage() {
                               <p className="font-medium line-clamp-2">{query.query_text}</p>
                             </TableCell>
                             <TableCell className="text-muted-foreground">
-                              <p className="line-clamp-2">{query.response_preview ?? "—"}</p>
+                              <p className="line-clamp-2">
+                                {query.response_preview 
+                                  ? query.response_preview.split(' ').slice(0, 5).join(' ') + '...'
+                                  : "—"}
+                              </p>
                             </TableCell>
                             <TableCell className="text-muted-foreground whitespace-nowrap">
                               {formatDate(query.timestamp)}

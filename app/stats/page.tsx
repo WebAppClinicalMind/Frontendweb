@@ -1,246 +1,273 @@
-"use client"
+"use client";
 
-import useSWR from "swr"
-import { AppLayout } from "@/components/layout/app-layout"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Skeleton } from "@/components/ui/skeleton"
-import { Database, FileText, Layers, Cpu, Server, CheckCircle2, XCircle, RefreshCw } from "lucide-react"
-import { Button } from "@/components/ui/button"
-import apiClient from "@/lib/api/client"
-import type { IndexStatistics, ModelInfo, HealthStatus } from "@/lib/api/types"
+import jsPDF from "jspdf";
+import { useState } from "react";
+import axios from "axios";
+import useSWR from "swr";
+import { AppLayout } from "@/components/layout/app-layout";
+
+type CSVRow = string[];
+type Classification = Record<string, string>;
+type Plots = Record<string, string>;
 
 export default function StatsPage() {
-  const {
-    data: stats,
-    isLoading: statsLoading,
-    mutate: mutateStats,
-  } = useSWR<IndexStatistics>("index-statistics", () => apiClient.getIndexStatistics(), { revalidateOnFocus: false })
+  const [file, setFile] = useState<File | null>(null);
+  const [tableData, setTableData] = useState<CSVRow[]>([]);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [statsData, setStatsData] = useState<any>({});
+  const [plots, setPlots] = useState<Plots>({});
+  const [selectedPatient, setSelectedPatient] = useState<number | null>(null);
+  const [rawPatientNames, setRawPatientNames] = useState<string[]>([]);
+  const [pdfName, setPdfName] = useState("");
+  const [classificationResults, setClassificationResults] = useState<Classification[]>([]);
+  const [rawCsvColumns, setRawCsvColumns] = useState<string[]>([]);
+  const [rawCsvData, setRawCsvData] = useState<CSVRow[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  const {
-    data: modelInfo,
-    isLoading: modelLoading,
-    mutate: mutateModel,
-  } = useSWR<ModelInfo>("model-info", () => apiClient.getModelInfo(), { revalidateOnFocus: false })
+  // -------------------------
+  // FILE UPLOAD
+  // -------------------------
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const uploaded = e.target.files?.[0];
+    if (!uploaded) return;
+    setFile(uploaded);
 
-  const { data: ingestorHealth, mutate: mutateIngestor } = useSWR<HealthStatus>(
-    "ingestor-health",
-    () => apiClient.checkIngestorHealth(),
-    { revalidateOnFocus: false, errorRetryCount: 1 },
-  )
+    const text = await uploaded.text();
+    const rows = text
+      .split("\n")
+      .filter(Boolean)
+      .map((row: string) => row.split(","));
 
-  const { data: deidHealth, mutate: mutateDeid } = useSWR<HealthStatus>(
-    "deid-health",
-    () => apiClient.checkDeidHealth(),
-    { revalidateOnFocus: false, errorRetryCount: 1 },
-  )
+    setRawCsvColumns(rows[0]);
+    setRawCsvData(rows.slice(1));
+    setRawPatientNames(rows.slice(1).map((row: CSVRow) => row[0]));
+    setPdfName(uploaded.name);
+    setColumns(rows[0]);
+    setTableData(rows.slice(1));
+    setSelectedPatient(0);
+  };
 
-  const { data: indexerHealth, mutate: mutateIndexer } = useSWR<HealthStatus>(
-    "indexer-health",
-    () => apiClient.checkIndexerHealth(),
-    { revalidateOnFocus: false, errorRetryCount: 1 },
-  )
+  // -------------------------
+  // PROCESS CSV (CALL BACKEND)
+  // -------------------------
+  const handleProcess = async () => {
+    if (!file) return alert("Upload CSV first");
+    setLoading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
 
-  const { data: qaHealth, mutate: mutateQA } = useSWR<HealthStatus>("qa-health", () => apiClient.checkQAHealth(), {
-    revalidateOnFocus: false,
-    errorRetryCount: 1,
-  })
+      const response = await axios.post("http://127.0.0.1:8000/classify", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      const data = response.data;
 
-  const refreshAll = () => {
-    mutateStats()
-    mutateModel()
-    mutateIngestor()
-    mutateDeid()
-    mutateIndexer()
-    mutateQA()
-  }
+      setStatsData(data.stats || {});
+      setPlots(data.plots || {});
+      setColumns(data.table?.columns || []);
+      setTableData(data.table?.values || []);
 
-  const services = [
-    { name: "DocIngestor", health: ingestorHealth, description: "Document upload and processing" },
-    { name: "DeID", health: deidHealth, description: "Anonymization service" },
-    { name: "SemanticIndexer", health: indexerHealth, description: "Search and indexing" },
-    { name: "LLM QA", health: qaHealth, description: "Question answering" },
-  ]
+      const conditionCols = ["Diabetes", "Obesity", "Cancer", "Asthma", "Hypertension", "Arthritis"];
+      const allClassifications = (data.table?.values || []).map((row: CSVRow) => {
+        const patientClassification: Classification = {};
+        conditionCols.forEach((col) => {
+          const idx = data.table.columns.indexOf(col);
+          const value = idx !== -1 && row[idx] != null ? String(row[idx]).trim().toLowerCase() : "";
+          patientClassification[col] = ["yes", "high", "1"].includes(value) ? "Élevé" : "Stable";
+        });
+        return patientClassification;
+      });
+      setClassificationResults(allClassifications);
+      setSelectedPatient(0);
+    } catch (err) {
+      console.error(err);
+      alert("Error processing CSV");
+    }
+    setLoading(false);
+  };
 
+  // -------------------------
+  // PDF EXPORT
+  // -------------------------
+  const downloadPDF = () => {
+    try {
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+
+      pdf.setFontSize(20);
+      pdf.text("🩺 Rapport Patient – MyClinic", 10, 15);
+      pdf.setFontSize(12);
+      pdf.text(`Fichier Importé : ${pdfName}`, 10, 25);
+      pdf.text(`Date : ${new Date().toLocaleString()}`, 10, 32);
+
+      let y = 42;
+      pdf.setFontSize(16);
+      pdf.text("📄 Données Originales du Fichier CSV", 10, y);
+      y += 8;
+      pdf.setFontSize(10);
+
+      rawCsvColumns.forEach((col, idx) => pdf.text(col, 10 + idx * 40, y));
+      y += 6;
+
+      rawCsvData.forEach((row) => {
+        row.forEach((cell, idx) => pdf.text(String(cell), 10 + idx * 40, y));
+        y += 6;
+        if (y > 270) {
+          pdf.addPage();
+          y = 15;
+        }
+      });
+
+      pdf.addPage();
+      y = 15;
+      pdf.setFontSize(16);
+      pdf.text("📊 Visualisations", 10, y);
+      y += 10;
+
+      Object.entries(plots).forEach(([plotName, base64]) => {
+        pdf.setFontSize(12);
+        pdf.text(plotName, 10, y);
+        y += 5;
+        if (typeof base64 === "string") {
+          pdf.addImage(`data:image/png;base64,${base64}`, "PNG", 10, y, pageWidth - 20, 80);
+          y += 90;
+        }
+        if (y > 260) {
+          pdf.addPage();
+          y = 15;
+        }
+      });
+
+      pdf.save("PatientDashboard.pdf");
+    } catch (err) {
+      console.error(err);
+      alert("Erreur lors de la génération du PDF");
+    }
+  };
+
+  // -------------------------
+  // SWR FETCH
+  // -------------------------
+  const fetcher = (url: string) => axios.get(url).then((res) => res.data);
+  const { data: stats, isLoading: statsLoading } = useSWR("/api/stats", fetcher);
+
+  // -------------------------
+  // MODERN PAGE RENDER
+  // -------------------------
   return (
-    <AppLayout title="System Statistics" description="Monitor system health and performance">
-      <div className="space-y-6">
-        {/* Refresh Button */}
-        <div className="flex justify-end">
-          <Button variant="outline" onClick={refreshAll}>
-            <RefreshCw className="mr-2 h-4 w-4" />
-            Refresh All
-          </Button>
+    <AppLayout title="Visualisation des Statistiques" description="Analyse des données patients et classification des Maladies">
+      <div className="min-h-screen bg-gradient-to-br from-green-50 via-green-100 to-green-200 py-12">
+        {/* Header */}
+        <div className="text-center mb-12">
+          <h1 className="text-5xl font-extrabold text-green-900 mb-3">🩺 Visualisation Des Statistiques</h1>
+          <p className="text-green-700 text-lg">Analyse des données patients et classification des Maladies</p>
         </div>
 
-        {/* Index Statistics */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Documents</CardTitle>
-              <FileText className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {statsLoading ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <div className="text-2xl font-bold">{stats?.total_documents ?? "—"}</div>
-              )}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Chunks</CardTitle>
-              <Layers className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {statsLoading ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <div className="text-2xl font-bold">{stats?.total_chunks?.toLocaleString() ?? "—"}</div>
-              )}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total Vectors</CardTitle>
-              <Database className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {statsLoading ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <div className="text-2xl font-bold">{stats?.total_vectors?.toLocaleString() ?? "—"}</div>
-              )}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Embedding Dim</CardTitle>
-              <Cpu className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              {statsLoading ? (
-                <Skeleton className="h-8 w-20" />
-              ) : (
-                <div className="text-2xl font-bold">{stats?.embedding_dimension ?? "—"}</div>
-              )}
-            </CardContent>
-          </Card>
+        {/* File Upload & Actions */}
+        <div className="flex flex-col md:flex-row items-center gap-4 bg-white bg-opacity-80 backdrop-blur-md rounded-3xl shadow-2xl p-6 max-w-4xl mx-auto mb-10 transition hover:shadow-3xl">
+          <input
+            type="file"
+            accept=".csv"
+            onChange={handleFileUpload}
+            className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-green-500 transition"
+          />
+          <button
+            onClick={handleProcess}
+            className="px-6 py-3 bg-gradient-to-r from-green-500 to-green-700 text-white font-semibold rounded-xl shadow-lg hover:from-green-600 hover:to-green-800 transition"
+          >
+            Analyze
+          </button>
+          <button
+            onClick={downloadPDF}
+            className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-700 text-white font-semibold rounded-xl shadow-lg hover:from-blue-600 hover:to-blue-800 transition"
+          >
+            Download PDF
+          </button>
         </div>
 
-        {/* Model & Index Info */}
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>LLM Model Information</CardTitle>
-              <CardDescription>Current question-answering model</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {modelLoading ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-2/3" />
-                  <Skeleton className="h-4 w-3/4" />
-                </div>
-              ) : modelInfo ? (
-                <dl className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Model Name</dt>
-                    <dd className="font-mono text-sm">{modelInfo.model_name}</dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Provider</dt>
-                    <dd className="font-medium">{modelInfo.provider}</dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Status</dt>
-                    <dd>
-                      {modelInfo.is_available ? (
-                        <Badge className="bg-[var(--success)] text-[var(--success-foreground)]">Available</Badge>
-                      ) : (
-                        <Badge variant="destructive">Unavailable</Badge>
-                      )}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Base URL</dt>
-                    <dd className="font-mono text-xs truncate max-w-[200px]">{modelInfo.base_url}</dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className="text-muted-foreground">Unable to load model information</p>
-              )}
-            </CardContent>
-          </Card>
+        {loading && <p className="text-center text-green-800 font-medium animate-pulse mb-6">⏳ Classification en cours...</p>}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Index Configuration</CardTitle>
-              <CardDescription>Semantic search index settings</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {statsLoading ? (
-                <div className="space-y-3">
-                  <Skeleton className="h-4 w-full" />
-                  <Skeleton className="h-4 w-2/3" />
-                </div>
-              ) : stats ? (
-                <dl className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Embedding Model</dt>
-                    <dd className="font-mono text-sm">{stats.embedding_model}</dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Index Type</dt>
-                    <dd className="font-medium">{stats.index_type}</dd>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <dt className="text-sm text-muted-foreground">Vector Dimension</dt>
-                    <dd className="font-medium">{stats.embedding_dimension}</dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className="text-muted-foreground">Unable to load index configuration</p>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Service Health */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Server className="h-5 w-5" />
-              Service Health
-            </CardTitle>
-            <CardDescription>Real-time status of all backend services</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {services.map((service) => (
-                <div key={service.name} className="flex items-center gap-4 rounded-lg border border-border bg-card p-4">
-                  <div
-                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
-                      service.health?.status === "healthy" ? "bg-[var(--success)]/10" : "bg-destructive/10"
+        {/* Dashboard */}
+        <div className="flex flex-col md:flex-row gap-6 max-w-6xl mx-auto">
+          {/* Sidebar */}
+          {rawPatientNames.length > 0 && (
+            <aside className="w-full md:w-64 bg-white bg-opacity-80 backdrop-blur-md p-6 rounded-2xl shadow-xl h-[500px] overflow-y-auto">
+              <h3 className="text-green-800 font-bold mb-4 text-lg">Liste des Patients</h3>
+              <ul className="space-y-2">
+                {rawPatientNames.map((name, index) => (
+                  <li
+                    key={index}
+                    onClick={() => setSelectedPatient(index)}
+                    className={`cursor-pointer p-3 rounded-xl transition ${
+                      selectedPatient === index
+                        ? "bg-green-200 font-semibold shadow-inner"
+                        : "hover:bg-green-100"
                     }`}
                   >
-                    {service.health?.status === "healthy" ? (
-                      <CheckCircle2 className="h-5 w-5 text-[var(--success)]" />
-                    ) : (
-                      <XCircle className="h-5 w-5 text-destructive" />
-                    )}
+                    {name}
+                  </li>
+                ))}
+              </ul>
+            </aside>
+          )}
+
+          {/* Patient Info + Classification */}
+          {selectedPatient !== null && rawCsvData[selectedPatient] && (
+            <section className="flex-1 bg-white bg-opacity-80 backdrop-blur-md p-6 rounded-3xl shadow-2xl space-y-6">
+              <h2 className="text-green-800 font-bold text-2xl">Patient Info</h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {rawCsvColumns.map((col, i) => (
+                  <div
+                    key={i}
+                    className="bg-green-50 p-4 border-l-4 border-green-400 rounded-xl shadow-sm hover:shadow-md transition"
+                  >
+                    <strong>{col}:</strong> {rawCsvData[selectedPatient][i]}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium">{service.name}</p>
-                    <p className="text-xs text-muted-foreground truncate">{service.description}</p>
-                  </div>
+                ))}
+              </div>
+
+              {/* Classification Results */}
+              {classificationResults[selectedPatient] && (
+                <div className="bg-green-100 p-4 rounded-2xl shadow-inner">
+                  <h3 className="text-green-800 font-semibold mb-2">Résultats de classification</h3>
+                  <ul className="list-disc pl-6 text-green-900 space-y-1">
+                    {Object.entries(classificationResults[selectedPatient]).map(([condition, status], i) => (
+                      <li key={i}>
+                        {condition} -{" "}
+                        <span className={`${status === "Élevé" ? "text-red-600 font-bold" : "text-green-700"}`}>
+                          {status}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+
+        {/* Plots Section */}
+        {Object.keys(plots).length > 0 && (
+          <div className="mt-12 bg-white bg-opacity-80 backdrop-blur-md p-6 rounded-3xl shadow-2xl max-w-6xl mx-auto">
+            <h3 className="text-green-800 font-bold text-2xl mb-6">Visualisations Globales</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {Object.entries(plots).map(([key, value], i) => (
+                <div
+                  key={i}
+                  className="bg-green-50 bg-opacity-50 p-4 rounded-2xl shadow hover:shadow-lg transition text-center"
+                >
+                  <h4 className="font-medium text-green-800 mb-3">{key}</h4>
+                  <img
+                    src={`data:image/png;base64,${value}`}
+                    alt={key}
+                    className="w-full max-h-64 object-contain rounded-lg border"
+                  />
                 </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        )}
       </div>
     </AppLayout>
-  )
+  );
 }

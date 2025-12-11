@@ -26,7 +26,7 @@ export function Sidebar() {
             <Activity className="h-5 w-5 text-sidebar-primary-foreground" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">DocQA</h1>
+            <h1 className="text-lg font-semibold tracking-tight">ClinicalMind</h1>
             <p className="text-xs text-sidebar-foreground/60">Medical Q&A</p>
           </div>
         </div>
